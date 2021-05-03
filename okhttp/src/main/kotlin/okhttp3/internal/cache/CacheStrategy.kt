@@ -140,11 +140,13 @@ class CacheStrategy internal constructor(
     /** Returns a strategy to use assuming the request can use the network. */
     private fun computeCandidate(): CacheStrategy {
       // No cached response.
+      // 没有缓存
       if (cacheResponse == null) {
         return CacheStrategy(request, null)
       }
 
       // Drop the cached response if it's missing a required handshake.
+      // https请求，但是没有握手信息，进行网络请求：okhttp会保存ssl握手信息，如果这次发起了https请求，但是缓存的响应中没有握手信息
       if (request.isHttps && cacheResponse.handshake == null) {
         return CacheStrategy(request, null)
       }
@@ -152,11 +154,13 @@ class CacheStrategy internal constructor(
       // If this response shouldn't have been stored, it should never be used as a response source.
       // This check should be redundant as long as the persistence store is well-behaved and the
       // rules are constant.
+      // 主要是通过响应码以及头部缓存控制字段判断响应能不能缓存，不能缓存则进行网络请求
       if (!isCacheable(cacheResponse, request)) {
         return CacheStrategy(request, null)
       }
 
       val requestCaching = request.cacheControl
+      // 指定不缓存
       if (requestCaching.noCache || hasConditions(request)) {
         return CacheStrategy(request, null)
       }

@@ -141,6 +141,7 @@ class RealConnectionPool(
    *
    * Returns the duration in nanoseconds to sleep until the next scheduled call to this method.
    * Returns -1 if no further cleanups are required.
+   * 清理
    */
   fun cleanup(now: Long): Long {
     var inUseConnectionCount = 0
@@ -153,15 +154,15 @@ class RealConnectionPool(
       synchronized(connection) {
         // If the connection is in use, keep searching.
         if (pruneAndGetAllocationCount(connection, now) > 0) {
-          inUseConnectionCount++
+          inUseConnectionCount++  // 使用的个数
         } else {
-          idleConnectionCount++
+          idleConnectionCount++ // 未使用的个数
 
           // If the connection is ready to be evicted, we're done.
           val idleDurationNs = now - connection.idleAtNs
           if (idleDurationNs > longestIdleDurationNs) {
             longestIdleDurationNs = idleDurationNs
-            longestIdleConnection = connection
+            longestIdleConnection = connection // 记录最长闲置的连接
           } else {
             Unit
           }
@@ -178,7 +179,7 @@ class RealConnectionPool(
           if (connection.calls.isNotEmpty()) return 0L // No longer idle.
           if (connection.idleAtNs + longestIdleDurationNs != now) return 0L // No longer oldest.
           connection.noNewExchanges = true
-          connections.remove(longestIdleConnection)
+          connections.remove(longestIdleConnection) // 释放
         }
 
         connection.socket().closeQuietly()

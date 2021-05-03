@@ -48,6 +48,10 @@ import okhttp3.internal.http2.ConnectionShutdownException
 import okhttp3.internal.withSuppressed
 
 /**
+ * 重试/重定向
+ * 交出拦截器之前：判断用户是否取消了请求
+ * 获得结果之后：根据响应码是否现有一套重定向
+ * 满足条件会重启执行所有拦截器
  * This interceptor recovers from failures and follows redirects as necessary. It may throw an
  * [IOException] if the call was canceled.
  */
@@ -62,7 +66,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
     var priorResponse: Response? = null
     var newExchangeFinder = true
     var recoveredFailures = listOf<IOException>()
-    while (true) {
+    while (true) { // 重试
       call.enterNetworkInterceptorExchange(request, newExchangeFinder)
 
       var response: Response
@@ -73,9 +77,10 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
         }
 
         try {
-          response = realChain.proceed(request)
+          response = realChain.proceed(request) //  主要是对于响应做处理
           newExchangeFinder = true
         } catch (e: RouteException) {
+          // 路由异常，连接未成功，请求还没发出去
           // The attempt to connect via a route failed. The request will not have been sent.
           if (!recover(e.lastConnectException, call, request, requestSendStarted = false)) {
             throw e.firstConnectException.withSuppressed(recoveredFailures)
@@ -83,7 +88,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
             recoveredFailures += e.firstConnectException
           }
           newExchangeFinder = false
-          continue
+          continue // 重试
         } catch (e: IOException) {
           // An attempt to communicate with a server failed. The request may have been sent.
           if (!recover(e, call, request, requestSendStarted = e !is ConnectionShutdownException)) {
@@ -92,10 +97,11 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
             recoveredFailures += e
           }
           newExchangeFinder = false
-          continue
+          continue // 重试
         }
 
         // Attach the prior response if it exists. Such responses never have a body.
+        // 如果进过重试/重定向才成功的，则在本次响应中记录上次响应的情况
         if (priorResponse != null) {
           response = response.newBuilder()
               .priorResponse(priorResponse.newBuilder()
@@ -105,9 +111,10 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
         }
 
         val exchange = call.interceptorScopedExchange
+        // 处理3xx和4xx的一些状态码：301、302重定向
         val followUp = followUpRequest(response, exchange)
 
-        if (followUp == null) {
+        if (followUp == null) { // 无需重定向
           if (exchange != null && exchange.isDuplex) {
             call.timeoutEarlyExit()
           }
@@ -123,7 +130,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
 
         response.body?.closeQuietly()
 
-        if (++followUpCount > MAX_FOLLOW_UPS) {
+        if (++followUpCount > MAX_FOLLOW_UPS) { // 重定向次数不能超过一定数量
           throw ProtocolException("Too many follow-up requests: $followUpCount")
         }
 
@@ -136,6 +143,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
   }
 
   /**
+   * 去重试
    * Report and attempt to recover from a failure to communicate with a server. Returns true if
    * `e` is recoverable, or false if the failure is permanent. Requests with a body can only
    * be recovered if the body is buffered or if the failure occurred before the request has been
@@ -148,29 +156,34 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
     requestSendStarted: Boolean
   ): Boolean {
     // The application layer has forbidden retries.
+    // 全局配置是否可以重试
     if (!client.retryOnConnectionFailure) return false
 
     // We can't send the request body again.
+    // 单次请求是否允许重试
     if (requestSendStarted && requestIsOneShot(e, userRequest)) return false
 
     // This exception is fatal.
+    // 判断是否属于重试的异常
     if (!isRecoverable(e, requestSendStarted)) return false
 
     // No more routes to attempt.
+    // 是否存在更多的路由
     if (!call.retryAfterFailure()) return false
 
     // For failure recovery, use the same route selector with a new connection.
     return true
   }
-
+  // 单次请求是否允许重试
   private fun requestIsOneShot(e: IOException, userRequest: Request): Boolean {
     val requestBody = userRequest.body
     return (requestBody != null && requestBody.isOneShot()) ||
         e is FileNotFoundException
   }
-
+  // 是否可以恢复
   private fun isRecoverable(e: IOException, requestSendStarted: Boolean): Boolean {
     // If there was a protocol problem, don't recover.
+    // 协议异常 如204但是返回了内容，参考CallServerInterceptor
     if (e is ProtocolException) {
       return false
     }
@@ -178,7 +191,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
     // If there was an interruption don't recover, but if there was a timeout connecting to a route
     // we should try the next route (if there is one).
     if (e is InterruptedIOException) {
-      return e is SocketTimeoutException && !requestSendStarted
+      return e is SocketTimeoutException && !requestSendStarted // sockettimout可以重试
     }
 
     // Look for known client-side or negotiation errors that are unlikely to be fixed by trying
@@ -186,11 +199,11 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
     if (e is SSLHandshakeException) {
       // If the problem was a CertificateException from the X509TrustManager,
       // do not retry.
-      if (e.cause is CertificateException) {
+      if (e.cause is CertificateException) { // 证书异常，不重试
         return false
       }
     }
-    if (e is SSLPeerUnverifiedException) {
+    if (e is SSLPeerUnverifiedException) { // 证书校验失败 不匹配、过期 ：不重试
       // e.g. a certificate pinning error.
       return false
     }
@@ -201,6 +214,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
   }
 
   /**
+   * 重定向
    * Figures out the HTTP request to make in response to receiving [userResponse]. This will
    * either add authentication headers, follow redirects or handle a client request timeout. If a
    * follow-up is either unnecessary or not applicable, this returns null.
@@ -212,21 +226,21 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
 
     val method = userResponse.request.method
     when (responseCode) {
-      HTTP_PROXY_AUTH -> {
+      HTTP_PROXY_AUTH -> { // 设置代理 407
         val selectedProxy = route!!.proxy
         if (selectedProxy.type() != Proxy.Type.HTTP) {
           throw ProtocolException("Received HTTP_PROXY_AUTH (407) code while not using proxy")
         }
-        return client.proxyAuthenticator.authenticate(route, userResponse)
+        return client.proxyAuthenticator.authenticate(route, userResponse) // 鉴权接口，设置用户名和密码
       }
-
-      HTTP_UNAUTHORIZED -> return client.authenticator.authenticate(route, userResponse)
-
+      // 401 无权限
+      HTTP_UNAUTHORIZED -> return client.authenticator.authenticate(route, userResponse) //
+      //  重定向
       HTTP_PERM_REDIRECT, HTTP_TEMP_REDIRECT, HTTP_MULT_CHOICE, HTTP_MOVED_PERM, HTTP_MOVED_TEMP, HTTP_SEE_OTHER -> {
         return buildRedirectRequest(userResponse, method)
       }
 
-      HTTP_CLIENT_TIMEOUT -> {
+      HTTP_CLIENT_TIMEOUT -> { // 408客户端超时
         // 408's are rare in practice, but some servers like HAProxy use this response code. The
         // spec says that we may repeat the request without modifications. Modern browsers also
         // repeat the request (even non-idempotent ones.)
@@ -249,17 +263,17 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
           return null
         }
 
-        return userResponse.request
+        return userResponse.request // 直接返回
       }
 
-      HTTP_UNAVAILABLE -> {
+      HTTP_UNAVAILABLE -> { // 503服务不可用
         val priorResponse = userResponse.priorResponse
         if (priorResponse != null && priorResponse.code == HTTP_UNAVAILABLE) {
           // We attempted to retry and got another timeout. Give up.
           return null
         }
 
-        if (retryAfter(userResponse, Integer.MAX_VALUE) == 0) {
+        if (retryAfter(userResponse, Integer.MAX_VALUE) == 0) { // 马上重试
           // specifically received an instruction to retry without delay
           return userResponse.request
         }
@@ -331,7 +345,7 @@ class RetryAndFollowUpInterceptor(private val client: OkHttpClient) : Intercepto
   }
 
   private fun retryAfter(userResponse: Response, defaultDelay: Int): Int {
-    val header = userResponse.header("Retry-After") ?: return defaultDelay
+    val header = userResponse.header("Retry-After") ?: return defaultDelay // 过段时间再过来请求
 
     // https://tools.ietf.org/html/rfc7231#section-7.1.3
     // currently ignores a HTTP-date, and assumes any non int 0 is a delay

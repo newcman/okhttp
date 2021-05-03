@@ -23,7 +23,9 @@ import okhttp3.internal.connection.RealConnection
 import okio.Sink
 import okio.Source
 
-/** Encodes HTTP requests and decodes HTTP responses. */
+/** Encodes HTTP requests and decodes HTTP responses.
+ * 编码http请求和解码http响应
+ * */
 interface ExchangeCodec {
   /** Returns the connection that carries this codec. */
   val connection: RealConnection

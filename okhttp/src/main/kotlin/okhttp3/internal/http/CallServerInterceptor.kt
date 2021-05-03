@@ -41,6 +41,7 @@ class CallServerInterceptor(private val forWebSocket: Boolean) : Interceptor {
       // If there's a "Expect: 100-continue" header on the request, wait for a "HTTP/1.1 100
       // Continue" response before transmitting the request body. If we don't get that, return
       // what we did get (such as a 4xx response) without ever transmitting the request body.
+      // 数据太大了。问一下服务器是否接收数据
       if ("100-continue".equals(request.header("Expect"), ignoreCase = true)) {
         exchange.flushRequest()
         responseBuilder = exchange.readResponseHeaders(expectContinue = true)

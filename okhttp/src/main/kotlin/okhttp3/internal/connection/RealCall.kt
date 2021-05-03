@@ -175,15 +175,15 @@ class RealCall(
   internal fun getResponseWithInterceptorChain(): Response {
     // Build a full stack of interceptors.
     val interceptors = mutableListOf<Interceptor>()
-    interceptors += client.interceptors
-    interceptors += RetryAndFollowUpInterceptor(client)
-    interceptors += BridgeInterceptor(client.cookieJar)
-    interceptors += CacheInterceptor(client.cache)
-    interceptors += ConnectInterceptor
+    interceptors += client.interceptors // 自定义的拦截器，1、一定能执行 2.第一个拿到request，最后一个拿到responce
+    interceptors += RetryAndFollowUpInterceptor(client) // 重试/重定向
+    interceptors += BridgeInterceptor(client.cookieJar) //拼请求头等，处理gzip
+    interceptors += CacheInterceptor(client.cache) // 处理缓存
+    interceptors += ConnectInterceptor // 连接拦击，创建连接，获取对于的socket流
     if (!forWebSocket) {
-      interceptors += client.networkInterceptors
+      interceptors += client.networkInterceptors // 1、不一定能执行，前面的可能出问题2、应答的请求是真正发出去的完整处理完之后的request
     }
-    interceptors += CallServerInterceptor(forWebSocket)
+    interceptors += CallServerInterceptor(forWebSocket) // 与服务器通信，发送数据并解析读取响应数据
 
     val chain = RealInterceptorChain(
         call = this,

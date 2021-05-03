@@ -30,6 +30,8 @@ import okio.buffer
  * Bridges from application code to network code. First it builds a network request from a user
  * request. Then it proceeds to call the network. Finally it builds a user response from the network
  * response.
+ *
+ * 负责将Http协议必备的请求头加入其中并添加一下默认的行为（如GZIP），在获得结果后，调用保存cookie接口并解析GZIP数据
  */
 class BridgeInterceptor(private val cookieJar: CookieJar) : Interceptor {
 
@@ -40,6 +42,7 @@ class BridgeInterceptor(private val cookieJar: CookieJar) : Interceptor {
 
     val body = userRequest.body
     if (body != null) {
+      // 为我们增加响应头
       val contentType = body.contentType()
       if (contentType != null) {
         requestBuilder.header("Content-Type", contentType.toString())
@@ -60,7 +63,7 @@ class BridgeInterceptor(private val cookieJar: CookieJar) : Interceptor {
     }
 
     if (userRequest.header("Connection") == null) {
-      requestBuilder.header("Connection", "Keep-Alive")
+      requestBuilder.header("Connection", "Keep-Alive") // 默认保持长连接
     }
 
     // If we add an "Accept-Encoding: gzip" header field we're responsible for also decompressing
@@ -68,25 +71,25 @@ class BridgeInterceptor(private val cookieJar: CookieJar) : Interceptor {
     var transparentGzip = false
     if (userRequest.header("Accept-Encoding") == null && userRequest.header("Range") == null) {
       transparentGzip = true
-      requestBuilder.header("Accept-Encoding", "gzip")
+      requestBuilder.header("Accept-Encoding", "gzip") // 压缩
     }
 
     val cookies = cookieJar.loadForRequest(userRequest.url)
     if (cookies.isNotEmpty()) {
-      requestBuilder.header("Cookie", cookieHeader(cookies))
+      requestBuilder.header("Cookie", cookieHeader(cookies)) // 设置cookie，cookie保存和加载要自己处理
     }
 
     if (userRequest.header("User-Agent") == null) {
       requestBuilder.header("User-Agent", userAgent)
     }
-
+    // 下一个拦截器
     val networkResponse = chain.proceed(requestBuilder.build())
 
     cookieJar.receiveHeaders(userRequest.url, networkResponse.headers)
 
     val responseBuilder = networkResponse.newBuilder()
         .request(userRequest)
-
+    // 拿到结果解压
     if (transparentGzip &&
         "gzip".equals(networkResponse.header("Content-Encoding"), ignoreCase = true) &&
         networkResponse.promisesBody()) {

@@ -101,10 +101,11 @@ class RealInterceptorChain(
       }
     }
 
-    // Call the next interceptor in the chain.
-    val next = copy(index = index + 1, request = request)
-    val interceptor = interceptors[index]
+    // Call the next interceptor in the chain. 直接new一个RealInterceptorChain实例
+    val next = copy(index = index + 1, request = request) // next是chain
+    val interceptor = interceptors[index] // 当前拦截器
 
+    // 处理当前的拦截器
     @Suppress("USELESS_ELVIS")
     val response = interceptor.intercept(next) ?: throw NullPointerException(
         "interceptor $interceptor returned null")

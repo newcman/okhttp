@@ -38,16 +38,18 @@ import okio.Buffer
 import okio.Source
 import okio.buffer
 
-/** Serves requests from the cache and writes responses to the cache. */
+/** Serves requests from the cache and writes responses to the cache.
+ * 缓存
+ * */
 class CacheInterceptor(internal val cache: Cache?) : Interceptor {
 
   @Throws(IOException::class)
   override fun intercept(chain: Interceptor.Chain): Response {
     val call = chain.call()
-    val cacheCandidate = cache?.get(chain.request())
+    val cacheCandidate = cache?.get(chain.request()) // 通过url的md5数据从文件缓存查找（GET请求才有缓存）
 
     val now = System.currentTimeMillis()
-
+    // 缓存策略：根据各种条件（请求头）组成 请求与缓存
     val strategy = CacheStrategy.Factory(now, chain.request(), cacheCandidate).compute()
     val networkRequest = strategy.networkRequest
     val cacheResponse = strategy.cacheResponse
@@ -61,11 +63,12 @@ class CacheInterceptor(internal val cache: Cache?) : Interceptor {
     }
 
     // If we're forbidden from using the network and the cache is insufficient, fail.
+    // 没有网络请求也没有缓存，直接发起504
     if (networkRequest == null && cacheResponse == null) {
       return Response.Builder()
           .request(chain.request())
           .protocol(Protocol.HTTP_1_1)
-          .code(HTTP_GATEWAY_TIMEOUT)
+          .code(HTTP_GATEWAY_TIMEOUT) // 504
           .message("Unsatisfiable Request (only-if-cached)")
           .body(EMPTY_RESPONSE)
           .sentRequestAtMillis(-1L)
@@ -76,6 +79,7 @@ class CacheInterceptor(internal val cache: Cache?) : Interceptor {
     }
 
     // If we don't need the network, we're done.
+    // 直接使用缓存
     if (networkRequest == null) {
       return cacheResponse!!.newBuilder()
           .cacheResponse(stripBody(cacheResponse))
@@ -83,7 +87,7 @@ class CacheInterceptor(internal val cache: Cache?) : Interceptor {
             listener.cacheHit(call, it)
           }
     }
-
+    // 以下为需要请求
     if (cacheResponse != null) {
       listener.cacheConditionalHit(call, cacheResponse)
     } else if (cache != null) {
@@ -102,6 +106,7 @@ class CacheInterceptor(internal val cache: Cache?) : Interceptor {
 
     // If we have a cache response too, then we're doing a conditional get.
     if (cacheResponse != null) {
+      // 发送请求，返回了304，则使用缓存
       if (networkResponse?.code == HTTP_NOT_MODIFIED) {
         val response = cacheResponse.newBuilder()
             .headers(combine(cacheResponse.headers, networkResponse.headers))
